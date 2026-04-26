@@ -63,7 +63,18 @@ func Run(args []string) {
 	opt := optim.NewAdamW(ckpt.OptimizerCfg)
 	checkpoint.UnpackModel(ckpt, g, opt)
 
-	encodedPrompt := vocab.Encode(*prompt)
+	// Support FILE:<path> syntax to load prompt from a text file.
+	promptStr := *prompt
+	if len(promptStr) > 5 && promptStr[:5] == "FILE:" {
+		raw, err := os.ReadFile(promptStr[5:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sample: read prompt file: %v\n", err)
+			os.Exit(1)
+		}
+		promptStr = string(raw)
+	}
+
+	encodedPrompt := vocab.Encode(promptStr)
 	ctx := make([]int32, len(encodedPrompt))
 	for i, tok := range encodedPrompt {
 		ctx[i] = int32(tok)

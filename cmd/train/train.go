@@ -42,12 +42,14 @@ func Run(args []string) {
 	warmupIters := fs.Int("warmup-iters", 100, "warmup steps")
 	weightDecay := fs.Float64("weight-decay", 0.1, "AdamW weight decay")
 	beta1 := fs.Float64("beta1", 0.9, "AdamW beta1")
-	beta2 := fs.Float64("beta2", 0.99, "AdamW beta2")
+	beta2 := fs.Float64("beta2", 0.95, "AdamW beta2")
 	eps := fs.Float64("eps", 1e-8, "AdamW epsilon")
 	gradClip := fs.Float64("grad-clip", 1.0, "global gradient-norm clip (<=0 disables)")
 	gradAccumSteps := fs.Int("grad-accum-steps", 1, "gradient accumulation steps")
 	resume := fs.String("resume", "", "path to checkpoint to resume from (empty = fresh)")
 	seed := fs.Int64("seed", 1337, "RNG seed")
+	alwaysSave := fs.Bool("always-save-checkpoint", false, "save checkpoint after every eval (not just on improvement)")
+	evalOnly := fs.Bool("eval-only", false, "run a single val-loss evaluation and exit")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "train: %v\n", err)
@@ -152,6 +154,13 @@ func Run(args []string) {
 
 	B, T := *batchSize, *blockSize
 
+	if *evalOnly {
+		valLoss := estimateLoss(g, valSet, B, T, *evalIters, valRng)
+		trainLoss := estimateLoss(g, trainSet, B, T, *evalIters, valRng)
+		fmt.Printf("eval: train %.4f, val %.4f\n", trainLoss, valLoss)
+		return
+	}
+
 	lastLogTime := time.Now()
 	var lastLoss float32
 
@@ -165,8 +174,10 @@ func Run(args []string) {
 			fmt.Printf("step %d: train %.4f, val %.4f, lr %.2e, %.1f ms/step\n",
 				step, trainLoss, valLoss, currentLR, stepMS)
 
-			if step == startStep || valLoss < bestValLoss {
-				bestValLoss = valLoss
+			if step == startStep || valLoss < bestValLoss || *alwaysSave {
+				if valLoss < bestValLoss {
+					bestValLoss = valLoss
+				}
 				ckptPath := filepath.Join(*outDir, "ckpt.ckpt")
 				ckpt := checkpoint.PackModel(g, opt, step, bestValLoss, cfg, optCfg)
 				if err := checkpoint.Save(ckptPath, ckpt); err != nil {
