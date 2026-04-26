@@ -189,6 +189,8 @@ func Run(args []string) {
 
 		// Gradient accumulation: zero grads ONCE, then accumulate grads over
 		// multiple forward/backward passes before a single Update.
+		// Divide each gradient by gradAccumSteps so the effective step is the
+		// mean over micro-batches (matching nanoGPT Python behaviour).
 		g.ZeroGrad()
 		var accumLoss float32
 		for micro := 0; micro < *gradAccumSteps; micro++ {
@@ -197,8 +199,14 @@ func Run(args []string) {
 			bwd()
 			accumLoss += loss
 		}
-		if *gradAccumSteps > 0 {
-			lastLoss = accumLoss / float32(*gradAccumSteps)
+		lastLoss = accumLoss / float32(*gradAccumSteps)
+		if *gradAccumSteps > 1 {
+			scale := 1.0 / float32(*gradAccumSteps)
+			for _, p := range g.Parameters() {
+				for i := range p.Grad {
+					p.Grad[i] *= scale
+				}
+			}
 		}
 
 		if *gradClip > 0 {
