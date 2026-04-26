@@ -1,0 +1,4 @@
+out/
+data/shakespeare_char/*.bin
+data/shakespeare_char/vocab.json
+*.ckpt

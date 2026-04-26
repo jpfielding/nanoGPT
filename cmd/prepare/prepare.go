@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -16,17 +18,35 @@ import (
 // Run executes the prepare subcommand with the given argv (without the
 // program name or subcommand token).
 func Run(args []string) {
+	const shakespeareURL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
+
 	fs := flag.NewFlagSet("prepare", flag.ExitOnError)
-	input := fs.String("input", "", "input text file (required)")
+	input := fs.String("input", "", "input text file (or use --shakespeare to download)")
 	outDir := fs.String("out-dir", "data/shakespeare_char", "output directory")
 	valSplit := fs.Float64("val-split", 0.1, "fraction for validation")
+	shakespeare := fs.Bool("shakespeare", false, "download the tiny Shakespeare dataset automatically")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "prepare: %v\n", err)
 		os.Exit(1)
 	}
 
+	if *shakespeare && *input == "" {
+		*input = filepath.Join(*outDir, "input.txt")
+		if err := os.MkdirAll(*outDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "prepare: mkdir: %v\n", err)
+			os.Exit(1)
+		}
+		if _, err := os.Stat(*input); err != nil {
+			fmt.Printf("downloading Shakespeare dataset...\n")
+			if err := downloadFile(*input, shakespeareURL); err != nil {
+				fmt.Fprintf(os.Stderr, "prepare: download: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if *input == "" {
-		fmt.Fprintln(os.Stderr, "prepare: --input is required")
+		fmt.Fprintln(os.Stderr, "prepare: --input is required (or use --shakespeare)")
 		os.Exit(1)
 	}
 	if *valSplit < 0 || *valSplit >= 1 {
@@ -83,6 +103,21 @@ func Run(args []string) {
 	fmt.Printf("wrote %s\n", trainPath)
 	fmt.Printf("wrote %s\n", valPath)
 	fmt.Printf("wrote %s\n", vocabPath)
+}
+
+func downloadFile(dest, url string) error {
+	resp, err := http.Get(url) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
 }
 
 // writeTokens writes tokens as raw little-endian uint16 to path.
