@@ -227,8 +227,13 @@ func Run(args []string) {
 
 		if step%*logInterval == 0 {
 			dt := time.Since(stepStart)
-			fmt.Printf("step %d: loss %.4f, lr %.2e, dt %.1fms\n",
-				step, lastLoss, opt.Config.LR, float32(dt.Microseconds())/1000.0)
+			dtSec := dt.Seconds()
+			tokensPerStep := B * T * *gradAccumSteps
+			toksPerSec := float64(tokensPerStep) / dtSec
+			mfu := g.EstimateMFU(*gradAccumSteps, dtSec)
+			fmt.Printf("step %d: loss %.4f, lr %.2e, dt %.1fms, tok/s %.0f, mfu %.2f%%\n",
+				step, lastLoss, opt.Config.LR, float32(dt.Microseconds())/1000.0,
+				toksPerSec, mfu*100.0)
 		}
 	}
 

@@ -251,6 +251,58 @@ func (g *GPT) LoadNamedParameters(params map[string]*tensor.Tensor) {
 	}
 }
 
+// CropBlockSize shrinks the model's maximum sequence length to newBlockSize.
+// This is useful for fine-tuning a pretrained model on shorter contexts. It
+// truncates the position-embedding table and each block's causal mask in
+// place (re-allocating backing storage). Panics if newBlockSize is larger
+// than the current BlockSize or < 1.
+func (g *GPT) CropBlockSize(newBlockSize int) {
+	cur := g.Config.BlockSize
+	if newBlockSize < 1 || newBlockSize > cur {
+		panic(fmt.Sprintf("model.GPT.CropBlockSize: newBlockSize %d out of range (1..%d)", newBlockSize, cur))
+	}
+	if newBlockSize == cur {
+		return
+	}
+	C := g.Config.NEmbdg
+
+	// Truncate position embedding: [cur, C] -> [newBlockSize, C].
+	newWPE := tensor.NewWithGrad(newBlockSize, C)
+	copy(newWPE.Data, g.WPE.Weight.Data[:newBlockSize*C])
+	g.WPE.Weight = newWPE
+
+	// Truncate each attention block's causal mask.
+	for _, blk := range g.Blocks {
+		m := blk.Attn.Mask
+		newMask := tensor.New(newBlockSize, newBlockSize)
+		for i := 0; i < newBlockSize; i++ {
+			copy(newMask.Data[i*newBlockSize:(i+1)*newBlockSize], m.Data[i*cur:i*cur+newBlockSize])
+		}
+		blk.Attn.Mask = newMask
+	}
+
+	g.Config.BlockSize = newBlockSize
+}
+
+// EstimateMFU returns an estimate of model flops utilization on an A100
+// bfloat16 peak (312 TFLOPS) for a given elapsed-time-per-iteration. This is
+// only meaningful on hardware that matches the reference peak; on CPU it is
+// informational. fwdbwdPerIter is typically 1 (or grad-accum-steps).
+func (g *GPT) EstimateMFU(fwdbwdPerIter int, dtSeconds float64) float64 {
+	cfg := g.Config
+	N := g.NumParameters()
+	L := cfg.NLayer
+	H := cfg.NHead
+	Q := cfg.NEmbdg / cfg.NHead
+	T := cfg.BlockSize
+	flopsPerToken := 6*N + 12*L*H*Q*T
+	flopsPerFwdbwd := flopsPerToken * T
+	flopsPerIter := flopsPerFwdbwd * fwdbwdPerIter
+	flopsAchieved := float64(flopsPerIter) * (1.0 / dtSeconds)
+	flopsPromised := 312e12
+	return flopsAchieved / flopsPromised
+}
+
 // Generate autoregressively samples up to maxNewTokens from the model given
 // an initial context. Sampling uses temperature scaling and top-k filtering;
 // set topK <= 0 to disable top-k.
